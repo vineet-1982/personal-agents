@@ -1,0 +1,857 @@
+import { useState, useEffect, useCallback, useRef } from "react";
+
+(() => {
+  if (document.getElementById("vault-styles")) return;
+  const s = document.createElement("style");
+  s.id = "vault-styles";
+  s.textContent = `
+    @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=DM+Sans:wght@300;400;500;600&display=swap');
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    input[type=date]::-webkit-calendar-picker-indicator { filter: invert(0.5); cursor:pointer; }
+    input[type=time]::-webkit-calendar-picker-indicator { filter: invert(0.5); cursor:pointer; }
+    ::-webkit-scrollbar { width: 3px; }
+    ::-webkit-scrollbar-thumb { background: rgba(212,168,67,0.25); border-radius: 2px; }
+    select option { background: #12141A; color: #E8E4DC; }
+    .vi { width:100%; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:10px 14px; color:#E8E4DC; font-size:14px; font-family:'DM Sans',sans-serif; outline:none; transition:border-color 0.15s; }
+    .vi:focus { border-color: var(--ac,#D4A843); }
+    .vs { width:100%; background:#12141A; border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:10px 14px; font-size:14px; font-family:'DM Sans',sans-serif; outline:none; cursor:pointer; }
+    @keyframes slideUp { from{transform:translateY(20px);opacity:0} to{transform:translateY(0);opacity:1} }
+    @keyframes fadeOut { from{opacity:1} to{opacity:0} }
+  `;
+  document.head.appendChild(s);
+})();
+
+const T = { bg:"#080A0F", surf:"rgba(255,255,255,0.04)", border:"rgba(255,255,255,0.08)", gold:"#D4A843", text:"#E8E4DC", muted:"#6B6B80" };
+
+const FOLDERS = [
+  { id:"todos",       icon:"✓",  label:"Things To Do",     sub:"Tasks & Reminders",    accent:"#4CAF8C" },
+  { id:"meetings",    icon:"◈",  label:"Weekly Meetings",   sub:"Schedule & Calendar",  accent:"#5B9BDB" },
+  { id:"events",      icon:"✦",  label:"Friends & Family",  sub:"Events & Occasions",   accent:"#DB8C5B" },
+  { id:"projects",    icon:"◉",  label:"Projects 2026",     sub:"Goals & Milestones",   accent:"#A87BDB" },
+  { id:"portfolio",   icon:"▲",  label:"Portfolio",         sub:"Investments & Assets", accent:"#D4A843" },
+  { id:"payments",    icon:"⬡",  label:"Due Payments",      sub:"Outgoing & Overdue",   accent:"#DB5B6B" },
+  { id:"receivables", icon:"◎",  label:"Receivables",       sub:"Money Coming In",      accent:"#3DBFA8" },
+  { id:"health",      icon:"♥",  label:"Health",            sub:"Appointments & Meds",  accent:"#E84393" },
+  { id:"expenses",    icon:"₹",  label:"Daily Expenses",    sub:"Track Every Rupee",    accent:"#FF8C42" },
+];
+
+const EMPTY = { todos:[], meetings:[], events:[], projects:[], portfolio:[], payments:[], receivables:[], health:[], expenses:[] };
+
+const uid    = () => Math.random().toString(36).slice(2,10);
+const fmt    = d => d ? new Date(d).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"}) : "—";
+const daysTo = d => { if(!d) return null; const diff=Math.ceil((new Date(d+["","T00:00:00"][d.length===10?1:0])-new Date())/86400000); return diff; };
+const isPast = d => daysTo(d)!==null && daysTo(d)<0;
+const rgb    = h => `${parseInt(h.slice(1,3),16)},${parseInt(h.slice(3,5),16)},${parseInt(h.slice(5,7),16)}`;
+
+const SKEY = "vault_data_v2";
+const PKEY = "vault_pin_v2";
+
+const store = {
+  async saveData(obj) {
+    const str = JSON.stringify(obj);
+    try { if(window.storage?.set) { await window.storage.set(SKEY, str); } } catch{}
+    try { sessionStorage.setItem(SKEY, str); } catch{}
+  },
+  async loadData() {
+    try {
+      if(window.storage?.get) {
+        const r = await window.storage.get(SKEY);
+        if(r?.value) { const p=JSON.parse(r.value); if(p&&typeof p==="object") return p; }
+      }
+    } catch{}
+    try {
+      const r = sessionStorage.getItem(SKEY);
+      if(r) { const p=JSON.parse(r); if(p&&typeof p==="object") return p; }
+    } catch{}
+    return null;
+  },
+  async savePin(pin) {
+    try { if(window.storage?.set) await window.storage.set(PKEY, pin); } catch{}
+    try { sessionStorage.setItem(PKEY, pin); } catch{}
+  },
+  async loadPin() {
+    try { if(window.storage?.get) { const r=await window.storage.get(PKEY); if(r?.value) return r.value; } } catch{}
+    try { const r=sessionStorage.getItem(PKEY); if(r) return r; } catch{}
+    return null;
+  },
+};
+
+function FI({ label, fk, type="text", ph, req, form, upd, ac }) {
+  return (
+    <div style={{marginBottom:14}}>
+      <label style={{color:T.muted,fontSize:10,display:"block",marginBottom:5,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.6px"}}>
+        {label}{req&&<span style={{color:ac}}> *</span>}
+      </label>
+      <input className="vi" style={{"--ac":ac}} type={type} value={form[fk]??""} placeholder={ph??""}
+        onChange={e=>upd(fk,e.target.value)}/>
+    </div>
+  );
+}
+
+function FS({ label, fk, opts, form, upd, req, ac }) {
+  return (
+    <div style={{marginBottom:14}}>
+      <label style={{color:T.muted,fontSize:10,display:"block",marginBottom:5,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.6px"}}>{label}{req&&<span style={{color:ac||T.gold}}> *</span>}</label>
+      <select className="vs" value={form[fk]??""} onChange={e=>upd(fk,e.target.value)} style={{color:form[fk]?T.text:T.muted}}>
+        <option value="">Select…</option>
+        {opts.map(o=><option key={o} value={o}>{o}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function FT({ label, fk, ph, form, upd, ac }) {
+  return (
+    <div style={{marginBottom:14}}>
+      <label style={{color:T.muted,fontSize:10,display:"block",marginBottom:5,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.6px"}}>{label}</label>
+      <textarea className="vi" style={{"--ac":ac,resize:"vertical",lineHeight:1.6}} rows={3} value={form[fk]??""} placeholder={ph??""} onChange={e=>upd(fk,e.target.value)}/>
+    </div>
+  );
+}
+
+function Toast({ msg, color }) {
+  return (
+    <div style={{
+      position:"fixed",bottom:32,left:"50%",transform:"translateX(-50%)",
+      background:color||"#4CAF8C",color:"#000",borderRadius:14,
+      padding:"10px 22px",fontSize:13,fontWeight:700,zIndex:999,
+      fontFamily:"'DM Sans',sans-serif",whiteSpace:"nowrap",
+      boxShadow:"0 8px 32px rgba(0,0,0,0.4)",
+      animation:"slideUp 0.25s ease, fadeOut 0.3s ease 2s forwards",
+    }}>{msg}</div>
+  );
+}
+
+export default function App() {
+  const [ready,  setReady]  = useState(false);
+  const [locked, setLocked] = useState(true);
+  const [pin,    setPin]    = useState("");
+  const [saved,  setSaved]  = useState(null);
+  const [step,   setStep]   = useState("set");
+  const [conf,   setConf]   = useState("");
+  const [err,    setErr]    = useState("");
+  const [data,   setData]   = useState(EMPTY);
+  const [view,   setView]   = useState(null);
+  const [toast,  setToast]  = useState(null);
+  const toastTimer = useRef(null);
+
+  const showToast = useCallback((msg, color) => {
+    clearTimeout(toastTimer.current);
+    setToast({ msg, color, key: Date.now() });
+    toastTimer.current = setTimeout(() => setToast(null), 2600);
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      const [p, d] = await Promise.all([store.loadPin(), store.loadData()]);
+      if (p) { setSaved(p); setStep("enter"); }
+      else   { setStep("set"); }
+      if (d && typeof d === "object") {
+        const merged = { ...EMPTY };
+        for (const key of Object.keys(EMPTY)) {
+          if (Array.isArray(d[key])) merged[key] = d[key];
+        }
+        setData(merged);
+      }
+      setReady(true);
+    })();
+  }, []);
+
+  const persist = useCallback(async (nd, msg) => {
+    setData(nd);
+    await store.saveData(nd);
+    if (msg) showToast(msg);
+  }, [showToast]);
+
+  const digit = useCallback(d => {
+    setPin(prev => {
+      const np = prev + d;
+      if (np.length < 4) return np;
+      setTimeout(async () => {
+        if (step === "enter") {
+          if (np === saved) { setLocked(false); setPin(""); setErr(""); }
+          else setTimeout(() => { setPin(""); setErr("Wrong PIN. Try again."); }, 280);
+        } else if (step === "set") {
+          setConf(np); setPin(""); setStep("confirm");
+        } else if (step === "confirm") {
+          if (np === conf) {
+            await store.savePin(np); setSaved(np); setLocked(false); setPin(""); setStep("enter"); setErr("");
+          } else {
+            setTimeout(() => { setPin(""); setConf(""); setErr("PINs didn't match."); setStep("set"); }, 280);
+          }
+        }
+      }, 0);
+      return np;
+    });
+  }, [step, saved, conf]);
+
+  if (!ready) return (
+    <div style={{background:T.bg,height:"100vh",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Sans',sans-serif"}}>
+      <div style={{color:T.gold,fontSize:13,opacity:0.7}}>Loading vault…</div>
+    </div>
+  );
+
+  if (locked) return <LockScreen pin={pin} step={step} err={err} onDigit={digit} onDel={()=>setPin(p=>p.slice(0,-1))}/>;
+
+  if (view) {
+    const folder = FOLDERS.find(f=>f.id===view);
+    return <>
+      <FolderView folder={folder} data={data} onBack={()=>setView(null)} onPersist={persist} onLock={()=>{setLocked(true);setView(null);}}/>
+      {toast && <Toast key={toast.key} msg={toast.msg} color={toast.color}/>}
+    </>;
+  }
+
+  return <>
+    <Dashboard data={data} onOpen={setView} onLock={()=>setLocked(true)}/>
+    {toast && <Toast key={toast.key} msg={toast.msg} color={toast.color}/>}
+  </>;
+}
+
+function LockScreen({ pin, step, err, onDigit, onDel }) {
+  const subs = { set:"Choose a 4-digit lock code", confirm:"Re-enter to confirm", enter:"Your personal vault is secured" };
+  const keys = [1,2,3,4,5,6,7,8,9,"",0,"⌫"];
+
+  return (
+    <div style={{background:T.bg,minHeight:"100vh",backgroundImage:"radial-gradient(ellipse 70% 35% at 50% 0%,rgba(212,168,67,0.09) 0%,transparent 65%)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:"'DM Sans',sans-serif",padding:"24px"}}>
+      <div style={{marginBottom:36,textAlign:"center"}}>
+        <div style={{width:88,height:88,borderRadius:28,margin:"0 auto 20px",fontSize:40,background:"linear-gradient(145deg,rgba(212,168,67,0.18),rgba(212,168,67,0.05))",border:"1px solid rgba(212,168,67,0.28)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 0 48px rgba(212,168,67,0.08)"}}>🔐</div>
+        <div style={{color:T.text,fontSize:22,fontWeight:700,fontFamily:"'Cormorant Garamond',serif"}}>Personal Vault</div>
+        <div style={{color:T.muted,fontSize:13,marginTop:5}}>{subs[step]??""}</div>
+      </div>
+      <div style={{display:"flex",gap:18,marginBottom:10}}>
+        {[0,1,2,3].map(i=>(
+          <div key={i} style={{width:15,height:15,borderRadius:"50%",transition:"all 0.15s",background:i<pin.length?T.gold:"transparent",border:`2px solid ${i<pin.length?T.gold:"rgba(255,255,255,0.2)"}`,transform:i<pin.length?"scale(1.15)":"scale(1)",boxShadow:i<pin.length?"0 0 14px rgba(212,168,67,0.55)":"none"}}/>
+        ))}
+      </div>
+      <div style={{height:26,display:"flex",alignItems:"center",marginBottom:6}}>
+        {err&&<div style={{color:"#DB5B6B",fontSize:12}}>{err}</div>}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,76px)",gap:12}}>
+        {keys.map((k,i)=>{
+          const empty=k==="",isDel=k==="⌫";
+          return (
+            <button key={i} onClick={()=>isDel?onDel():!empty&&onDigit(String(k))} disabled={empty}
+              style={{width:76,height:76,borderRadius:20,background:empty?"transparent":T.surf,border:empty?"none":`1px solid ${T.border}`,color:isDel?T.muted:T.text,fontSize:isDel?22:24,fontWeight:500,cursor:empty?"default":"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Sans',sans-serif",transition:"background 0.12s"}}
+              onMouseEnter={e=>{if(!empty){e.currentTarget.style.background="rgba(212,168,67,0.1)";e.currentTarget.style.borderColor="rgba(212,168,67,0.35)";}}}
+              onMouseLeave={e=>{if(!empty){e.currentTarget.style.background=T.surf;e.currentTarget.style.borderColor=T.border;}}}
+            >{k}</button>
+          );
+        })}
+      </div>
+      <div style={{marginTop:44,color:T.muted,fontSize:11,textAlign:"center",lineHeight:1.8}}>
+        🔒 Encrypted & saved to your account<br/><span style={{fontSize:10,opacity:0.6}}>Data persists across sessions</span>
+      </div>
+    </div>
+  );
+}
+
+function Dashboard({ data, onOpen, onLock }) {
+  const now = new Date();
+  const counts = {};
+  FOLDERS.forEach(f => {
+    const arr = data[f.id]||[];
+    counts[f.id] = f.id==="payments"    ? arr.filter(p=>!p.paid).length
+                 : f.id==="receivables" ? arr.filter(r=>!r.received).length
+                 : f.id==="todos"       ? arr.length
+                 : f.id==="expenses"    ? arr.filter(e=>{ const d=new Date(e.date||e.createdAt); const n=new Date(); return d.getMonth()===n.getMonth()&&d.getFullYear()===n.getFullYear(); }).length
+                 : arr.filter(i=>!isPast(i.date||i.dueDate)).length;
+  });
+
+  const upcoming = [...(data.meetings||[]),...(data.events||[]),...(data.health||[])].filter(x=>x.date&&!isPast(x.date)).sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const next = upcoming[0];
+  const overdue = (data.payments||[]).filter(p=>!p.paid&&isPast(p.dueDate));
+  const pending = (data.payments||[]).filter(p=>!p.paid).reduce((s,p)=>s+Number(p.amount||0),0);
+  const totalReceivable = (data.receivables||[]).filter(r=>!r.received).reduce((s,r)=>s+Number(r.amount||0),0);
+  const thisMonth = (data.expenses||[]).filter(e=>{ const d=new Date(e.date||e.createdAt); const n=new Date(); return d.getMonth()===n.getMonth()&&d.getFullYear()===n.getFullYear(); }).reduce((s,e)=>s+Number(e.amount||0),0);
+  const todayStr = new Date().toISOString().slice(0,10);
+  const todayExp = (data.expenses||[]).filter(e=>(e.date||"").slice(0,10)===todayStr).reduce((s,e)=>s+Number(e.amount||0),0);
+
+  return (
+    <div style={{background:T.bg,minHeight:"100vh",backgroundImage:"radial-gradient(ellipse 90% 30% at 50% 0%,rgba(212,168,67,0.06) 0%,transparent 55%)",fontFamily:"'DM Sans',sans-serif",paddingBottom:60}}>
+      <div style={{padding:"26px 22px 0",display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div>
+          <div style={{color:T.text,fontSize:24,fontWeight:700,fontFamily:"'Cormorant Garamond',serif",letterSpacing:"-0.4px"}}>Personal Vault</div>
+          <div style={{color:T.muted,fontSize:12,marginTop:3}}>{now.toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</div>
+        </div>
+        <button onClick={onLock} style={{background:T.surf,border:`1px solid ${T.border}`,borderRadius:12,padding:"8px 14px",color:T.muted,fontSize:12,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>
+          🔒 Lock</button>
+      </div>
+
+      {(next||overdue.length>0||pending>0||totalReceivable>0||thisMonth>0) && (
+        <div style={{margin:"18px 22px 0",padding:"14px 18px",background:"rgba(212,168,67,0.05)",borderRadius:16,border:"1px solid rgba(212,168,67,0.14)"}}>
+          {next&&<div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:(overdue.length||pending||totalReceivable||thisMonth)?8:0}}><span>📅</span><span style={{color:T.muted,fontSize:12}}>Next:</span><span style={{color:T.text,fontSize:13,fontWeight:600}}>{next.title}</span><span style={{color:T.gold,fontSize:12,marginLeft:"auto"}}>{fmt(next.date)}</span></div>}
+          {overdue.length>0&&<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:(pending||totalReceivable||thisMonth)?6:0}}><span>⚠️</span><span style={{color:"#DB5B6B",fontSize:12,fontWeight:600}}>{overdue.length} overdue payment{overdue.length>1?"s":""}</span></div>}
+          {pending>0&&<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:(totalReceivable||thisMonth)?6:0}}><span>💸</span><span style={{color:T.muted,fontSize:12}}>Payable:</span><span style={{color:T.text,fontSize:13,fontWeight:600}}>₹{pending.toLocaleString("en-IN")}</span></div>}
+          {totalReceivable>0&&<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:thisMonth?6:0}}><span>💰</span><span style={{color:T.muted,fontSize:12}}>Receivable:</span><span style={{color:"#3DBFA8",fontSize:13,fontWeight:600}}>₹{totalReceivable.toLocaleString("en-IN")}</span></div>}
+          {thisMonth>0&&<div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            <span>📊</span>
+            <span style={{color:T.muted,fontSize:12}}>This month:</span>
+            <span style={{color:"#FF8C42",fontSize:13,fontWeight:600}}>₹{thisMonth.toLocaleString("en-IN")}</span>
+            {todayExp>0&&<span style={{color:T.muted,fontSize:11,marginLeft:"auto"}}>Today ₹{todayExp.toLocaleString("en-IN")}</span>}
+          </div>}
+        </div>
+      )}
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,padding:"20px 22px 0"}}>
+        {FOLDERS.map(f=><FolderCard key={f.id} f={f} count={counts[f.id]??0} onClick={()=>onOpen(f.id)}/>)}
+      </div>
+      <div style={{textAlign:"center",marginTop:28,color:T.muted,fontSize:11,opacity:0.5}}>Auto-saved · Tied to your account</div>
+    </div>
+  );
+}
+
+function FolderCard({ f, count, onClick }) {
+  const [hov,setHov]=useState(false);
+  return (
+    <button onClick={onClick} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
+      style={{background:hov?`rgba(${rgb(f.accent)},0.09)`:T.surf,border:`1px solid ${hov?`rgba(${rgb(f.accent)},0.3)`:T.border}`,borderRadius:22,padding:"20px 16px",cursor:"pointer",textAlign:"left",transition:"all 0.2s",transform:hov?"translateY(-3px)":"none",boxShadow:hov?`0 10px 28px rgba(${rgb(f.accent)},0.13)`:"none",fontFamily:"'DM Sans',sans-serif"}}>
+      <div style={{width:44,height:44,borderRadius:13,marginBottom:14,fontSize:20,background:`rgba(${rgb(f.accent)},0.13)`,border:`1px solid rgba(${rgb(f.accent)},0.22)`,display:"flex",alignItems:"center",justifyContent:"center",color:f.accent,fontWeight:800}}>{f.icon}</div>
+      <div style={{color:T.text,fontSize:14,fontWeight:600,lineHeight:1.3}}>{f.label}</div>
+      <div style={{color:T.muted,fontSize:11,marginTop:2}}>{f.sub}</div>
+      {count>0?<div style={{marginTop:10,display:"inline-block",background:`rgba(${rgb(f.accent)},0.14)`,color:f.accent,borderRadius:20,padding:"2px 10px",fontSize:11,fontWeight:600}}>{count} item{count!==1?"s":""}</div>:<div style={{marginTop:10,color:T.muted,fontSize:11}}>Empty</div>}
+    </button>
+  );
+}
+
+function FolderView({ folder, data, onBack, onPersist }) {
+  const [showAdd,setShowAdd] = useState(false);
+  const [search,setSearch]   = useState("");
+  const items = data[folder.id] ?? [];
+
+  const sorted = [...items].sort((a,b)=>{
+    if(folder.id==="todos") return 0;
+    if(folder.id==="expenses") return new Date(b.date||b.createdAt||0)-new Date(a.date||a.createdAt||0);
+    return new Date(a.date||a.dueDate||a.createdAt||0)-new Date(b.date||b.dueDate||b.createdAt||0);
+  });
+
+  const filtered = search ? sorted.filter(i=>Object.values(i).some(v=>String(v).toLowerCase().includes(search.toLowerCase()))) : sorted;
+
+  const add = async item => {
+    const nd = { ...data, [folder.id]: [...(data[folder.id]||[]), { ...item, id:uid() }] };
+    await onPersist(nd, `✓ Saved to ${folder.label}`);
+    setShowAdd(false);
+  };
+
+  const del = async id => {
+    const nd = { ...data, [folder.id]: (data[folder.id]||[]).filter(i=>i.id!==id) };
+    await onPersist(nd, null);
+  };
+
+  const upd = async (id,u) => {
+    const nd = { ...data, [folder.id]: (data[folder.id]||[]).map(i=>i.id===id?{...i,...u}:i) };
+    await onPersist(nd, null);
+  };
+
+  return (
+    <div style={{background:T.bg,minHeight:"100vh",fontFamily:"'DM Sans',sans-serif"}}>
+      <div style={{padding:"18px 20px 16px",background:`linear-gradient(180deg,rgba(${rgb(folder.accent)},0.07) 0%,transparent 100%)`,borderBottom:`1px solid ${T.border}`,position:"sticky",top:0,zIndex:10,backdropFilter:"blur(12px)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <button onClick={onBack} style={{background:T.surf,border:`1px solid ${T.border}`,borderRadius:10,width:36,height:36,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:T.text,fontSize:18,flexShrink:0}}>←</button>
+          <div style={{width:36,height:36,borderRadius:10,flexShrink:0,background:`rgba(${rgb(folder.accent)},0.14)`,border:`1px solid rgba(${rgb(folder.accent)},0.22)`,display:"flex",alignItems:"center",justifyContent:"center",color:folder.accent,fontWeight:800,fontSize:18}}>{folder.icon}</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{color:T.text,fontSize:15,fontWeight:700}}>{folder.label}</div>
+            <div style={{color:T.muted,fontSize:11}}>{items.length} item{items.length!==1?"s":""}</div>
+          </div>
+          <button onClick={()=>setShowAdd(true)} style={{background:`rgba(${rgb(folder.accent)},0.14)`,border:`1px solid rgba(${rgb(folder.accent)},0.3)`,borderRadius:10,padding:"7px 15px",color:folder.accent,fontSize:13,fontWeight:600,cursor:"pointer",flexShrink:0,fontFamily:"'DM Sans',sans-serif"}}>+ Add</button>
+        </div>
+        {items.length>2&&<input className="vi" style={{"--ac":folder.accent,marginTop:12}} value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…"/>}
+      </div>
+
+      <div style={{padding:"14px 20px 40px"}}>
+        {folder.id==="expenses"  && items.length>0 && <ExpenseSummary items={items} accent={folder.accent}/>}
+        {folder.id==="portfolio" && items.length>0 && <PortfolioSummary items={items} accent={folder.accent}/>}
+        {filtered.length===0?(
+          <div style={{textAlign:"center",padding:"60px 0",color:T.muted}}>
+            <div style={{fontSize:44,marginBottom:14}}>{folder.icon}</div>
+            <div style={{fontSize:14}}>{search?"No results":"Nothing here yet"}</div>
+            <div style={{fontSize:12,marginTop:4,opacity:0.7}}>{search?"Try another keyword":"Tap + Add to get started"}</div>
+          </div>
+        ):(
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {filtered.map(item=>{
+              const p={key:item.id,item,accent:folder.accent,onDel:del,onUpd:upd};
+              if(folder.id==="todos")       return <TodoRow    {...p}/>;
+              if(folder.id==="meetings")    return <MeetingRow {...p}/>;
+              if(folder.id==="events")      return <EventRow   {...p}/>;
+              if(folder.id==="projects")    return <ProjectRow {...p}/>;
+              if(folder.id==="portfolio")   return <AssetRow   {...p} onUpd={upd}/>;
+              if(folder.id==="payments")    return <PayRow      {...p}/>;
+              if(folder.id==="receivables") return <ReceiveRow  {...p}/>;
+              if(folder.id==="health")      return <HealthRow   {...p}/>;
+              if(folder.id==="expenses")    return <ExpenseRow  {...p}/>;
+              return null;
+            })}
+          </div>
+        )}
+      </div>
+      {showAdd&&<AddModal folder={folder} onSave={add} onClose={()=>setShowAdd(false)}/>}
+    </div>
+  );
+}
+
+function Badge({ color, label, soft }) {
+  return <span style={{background:`rgba(${rgb(color)},${soft?0.13:0.18})`,color,fontSize:10,fontWeight:700,borderRadius:5,padding:"2px 7px",letterSpacing:"0.4px"}}>{label}</span>;
+}
+
+function Card({ children, accent, highlight }) {
+  return <div style={{background:T.surf,borderRadius:16,padding:"14px 16px",border:`1px solid ${highlight?`rgba(${rgb(accent)},0.35)`:T.border}`,boxShadow:highlight?`0 0 0 1px rgba(${rgb(accent)},0.18)`:"none"}}>{children}</div>;
+}
+
+function XBtn({ onClick }) {
+  return <button onClick={onClick} style={{background:"none",border:"none",color:T.muted,cursor:"pointer",fontSize:20,lineHeight:1,flexShrink:0}}>×</button>;
+}
+
+function TodoRow({ item, accent, onDel }) {
+  const [done,setDone]=useState(false);
+  const tick=()=>{setDone(true);setTimeout(()=>onDel(item.id),500);};
+  return (
+    <div style={{display:"flex",alignItems:"flex-start",gap:12,background:T.surf,borderRadius:16,padding:"14px 16px",border:`1px solid ${T.border}`,transition:"opacity 0.4s,transform 0.4s",opacity:done?0:1,transform:done?"translateX(30px)":"none"}}>
+      <button onClick={tick} style={{width:26,height:26,borderRadius:8,flexShrink:0,marginTop:1,background:done?accent:"transparent",border:`2px solid ${done?accent:"rgba(255,255,255,0.22)"}`,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#000",fontSize:14,transition:"all 0.2s"}}>{done?"✓":""}</button>
+      <div style={{flex:1}}>
+        <div style={{color:T.text,fontSize:14,fontWeight:500,textDecoration:done?"line-through":"none",opacity:done?0.4:1}}>{item.text}</div>
+        {item.notes&&<div style={{color:T.muted,fontSize:12,marginTop:3}}>{item.notes}</div>}
+        <div style={{color:T.muted,fontSize:11,marginTop:5}}>Added {fmt(item.createdAt)}</div>
+      </div>
+      <XBtn onClick={()=>onDel(item.id)}/>
+    </div>
+  );
+}
+
+function MeetingRow({ item, accent, onDel }) {
+  const d=daysTo(item.date),today=d===0,past=d!==null&&d<0;
+  return (
+    <Card accent={accent} highlight={today}>
+      <div style={{display:"flex",alignItems:"flex-start"}}>
+        <div style={{flex:1}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            <span style={{color:T.text,fontSize:14,fontWeight:600}}>{item.title}</span>
+            {today&&<Badge color={accent} label="TODAY"/>}{d===1&&<Badge color={accent} label="TOMORROW"/>}
+          </div>
+          <div style={{color:accent,fontSize:12,marginTop:5}}>📅 {fmt(item.date)}{item.time&&` · ${item.time}`}</div>
+          {item.location&&<div style={{color:T.muted,fontSize:12,marginTop:2}}>📍 {item.location}</div>}
+          {item.notes&&<div style={{color:T.muted,fontSize:12,marginTop:6,lineHeight:1.5}}>{item.notes}</div>}
+        </div>
+        <div style={{textAlign:"right",marginLeft:8,flexShrink:0}}>
+          {!past&&d!==null&&<div style={{color:today?accent:T.muted,fontSize:11,fontWeight:600,marginBottom:6}}>{today?"Today":`${d}d`}</div>}
+          {past&&<div style={{color:T.muted,fontSize:10,marginBottom:6}}>Past</div>}
+          <XBtn onClick={()=>onDel(item.id)}/>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function EventRow({ item, accent, onDel }) {
+  const d=daysTo(item.date);
+  return (
+    <Card accent={accent} highlight={d===0}>
+      <div style={{display:"flex",alignItems:"flex-start"}}>
+        <div style={{flex:1}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            <span style={{color:T.text,fontSize:14,fontWeight:600}}>{item.title}</span>
+            {d===0&&<Badge color={accent} label="TODAY!"/>}{d===1&&<Badge color={accent} label="TOMORROW"/>}
+          </div>
+          <div style={{color:T.muted,fontSize:12,marginTop:4}}>👤 {item.person}{item.type&&` · ${item.type}`}</div>
+          <div style={{color:accent,fontSize:12,marginTop:2}}>📅 {fmt(item.date)}</div>
+          {item.notes&&<div style={{color:T.muted,fontSize:12,marginTop:6}}>{item.notes}</div>}
+        </div>
+        <div style={{textAlign:"right",marginLeft:8,flexShrink:0}}>
+          {d!==null&&d>=0&&<div style={{color:T.muted,fontSize:11,marginBottom:6}}>{d===0?"Today":`${d}d`}</div>}
+          <XBtn onClick={()=>onDel(item.id)}/>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function ProjectRow({ item, accent, onDel }) {
+  const sc={Planning:"#5B9BDB","In Progress":"#D4A843","On Hold":"#DB8C5B",Completed:"#4CAF8C"}[item.status]||accent;
+  return (
+    <Card accent={accent}>
+      <div style={{display:"flex",alignItems:"flex-start"}}>
+        <div style={{flex:1}}>
+          <div style={{color:T.text,fontSize:14,fontWeight:600}}>{item.title}</div>
+          <div style={{marginTop:8,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+            <Badge color={sc} label={item.status||"Planning"} soft/>
+            {item.deadline&&<span style={{color:T.muted,fontSize:11}}>Due {fmt(item.deadline)}</span>}
+          </div>
+          {item.progress!==undefined&&(
+            <div style={{marginTop:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}><span style={{color:T.muted,fontSize:11}}>Progress</span><span style={{color:accent,fontSize:11,fontWeight:600}}>{item.progress}%</span></div>
+              <div style={{height:5,background:"rgba(255,255,255,0.07)",borderRadius:3}}><div style={{height:"100%",width:`${item.progress}%`,background:accent,borderRadius:3,transition:"width 0.4s"}}/></div>
+            </div>
+          )}
+          {item.notes&&<div style={{color:T.muted,fontSize:12,marginTop:8,lineHeight:1.5}}>{item.notes}</div>}
+        </div>
+        <XBtn onClick={()=>onDel(item.id)}/>
+      </div>
+    </Card>
+  );
+}
+
+function AssetRow({ item, accent, onDel, onUpd }) {
+  const [editing, setEditing] = useState(false);
+  const [form, setForm]       = useState({ name:item.name, type:item.type||"", value:item.value||"", units:item.units||"", notes:item.notes||"" });
+  const upd = useCallback((k,v) => setForm(prev=>({...prev,[k]:v})), []);
+  const fp  = { form, upd, ac:accent };
+
+  const save = () => {
+    onUpd(item.id, { name:form.name, type:form.type, value:form.value, units:form.units, notes:form.notes });
+    setEditing(false);
+  };
+
+  return (
+    <>
+      <Card accent={accent}>
+        <div style={{display:"flex",alignItems:"flex-start"}}>
+          <div style={{flex:1}}>
+            <div style={{color:T.text,fontSize:14,fontWeight:600}}>{item.name}</div>
+            {item.type&&<div style={{color:T.muted,fontSize:12,marginTop:2}}>{item.type}</div>}
+            {item.value&&<div style={{color:accent,fontSize:18,fontWeight:700,marginTop:6,fontFamily:"'Cormorant Garamond',serif"}}>₹{Number(item.value).toLocaleString("en-IN")}</div>}
+            {item.units&&<div style={{color:T.muted,fontSize:11,marginTop:2}}>{item.units} units</div>}
+            {item.notes&&<div style={{color:T.muted,fontSize:12,marginTop:6}}>{item.notes}</div>}
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-end",marginLeft:10,flexShrink:0}}>
+            <button onClick={()=>{ setForm({name:item.name,type:item.type||"",value:item.value||"",units:item.units||"",notes:item.notes||""}); setEditing(true); }} style={{
+              background:`rgba(${rgb(accent)},0.13)`,border:`1px solid rgba(${rgb(accent)},0.28)`,
+              borderRadius:8,padding:"4px 11px",color:accent,fontSize:11,fontWeight:600,
+              cursor:"pointer",fontFamily:"'DM Sans',sans-serif",whiteSpace:"nowrap",
+            }}>✏️ Edit</button>
+            <XBtn onClick={()=>onDel(item.id)}/>
+          </div>
+        </div>
+      </Card>
+      {editing && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.78)",zIndex:50,display:"flex",alignItems:"flex-end",backdropFilter:"blur(6px)"}}
+          onClick={e=>e.target===e.currentTarget&&setEditing(false)}>
+          <div style={{width:"100%",background:"#10121B",borderRadius:"24px 24px 0 0",padding:"22px 20px 48px",border:`1px solid ${T.border}`,borderBottom:"none",maxHeight:"90vh",overflowY:"auto"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+              <div style={{color:T.text,fontSize:16,fontWeight:700}}>Edit Asset</div>
+              <button onClick={()=>setEditing(false)} style={{background:T.surf,border:`1px solid ${T.border}`,borderRadius:8,width:32,height:32,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:T.muted,fontSize:20}}>×</button>
+            </div>
+            <div style={{color:T.muted,fontSize:12,marginBottom:20}}>Update values for <span style={{color:accent,fontWeight:600}}>{item.name}</span></div>
+            <FI {...fp} label="Asset Name" fk="name" ph="Stock, Fund, Property…" req/>
+            <FS {...fp} label="Asset Type" fk="type" opts={["Equity / Stocks","Mutual Fund","Real Estate","Fixed Deposit","Gold / Silver","Crypto","PPF / NPS","Other"]}/>
+            <div style={{marginBottom:14}}>
+              <label style={{color:T.muted,fontSize:10,display:"block",marginBottom:5,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.6px"}}>Current Value (₹) <span style={{color:accent}}>*</span></label>
+              <div style={{position:"relative"}}>
+                <span style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",color:T.muted,fontSize:14,pointerEvents:"none"}}>₹</span>
+                <input className="vi" style={{"--ac":accent,paddingLeft:28}} type="number" value={form.value||""} placeholder="0" onChange={e=>upd("value",e.target.value)}/>
+              </div>
+              {item.value && form.value && Number(form.value)!==Number(item.value) && (
+                <div style={{marginTop:6,fontSize:11,color:Number(form.value)>Number(item.value)?"#4CAF8C":"#DB5B6B",fontWeight:600}}>
+                  {Number(form.value)>Number(item.value)?"▲":"▼"} ₹{Math.abs(Number(form.value)-Number(item.value)).toLocaleString("en-IN")} {Number(form.value)>Number(item.value)?"gain":"drop"} from previous
+                </div>
+              )}
+            </div>
+            <FI {...fp} label="Units / Quantity" fk="units" ph="No. of units, shares, or grams"/>
+            <FT {...fp} label="Notes" fk="notes" ph="Broker, account no., strategy…"/>
+            <button onClick={save} style={{width:"100%",marginTop:8,background:`linear-gradient(135deg,${accent} 0%,rgba(${rgb(accent)},0.65) 100%)`,border:"none",borderRadius:14,padding:"15px",color:"#000",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>
+              Update Asset
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function PayRow({ item, accent, onDel, onUpd }) {
+  const ov=!item.paid&&isPast(item.dueDate);
+  return (
+    <div style={{background:T.surf,borderRadius:16,padding:"14px 16px",border:`1px solid ${ov?"rgba(219,91,107,0.32)":T.border}`}}>
+      <div style={{display:"flex",alignItems:"flex-start"}}>
+        <div style={{flex:1}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            <span style={{color:T.text,fontSize:14,fontWeight:600}}>{item.category||"Payment"}</span>
+            {ov&&<Badge color="#DB5B6B" label="OVERDUE"/>}{item.paid&&<Badge color="#4CAF8C" label="PAID"/>}
+          </div>
+          <div style={{color:ov?"#DB5B6B":accent,fontSize:18,fontWeight:700,marginTop:6,fontFamily:"'Cormorant Garamond',serif"}}>₹{Number(item.amount||0).toLocaleString("en-IN")}</div>
+          {item.dueDate&&<div style={{color:T.muted,fontSize:11,marginTop:2}}>Due: {fmt(item.dueDate)}</div>}
+          {item.notes&&<div style={{color:T.muted,fontSize:12,marginTop:6}}>{item.notes}</div>}
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"flex-end",marginLeft:10}}>
+          {!item.paid&&<button onClick={()=>onUpd(item.id,{paid:true})} style={{background:"rgba(76,175,140,0.1)",border:"1px solid rgba(76,175,140,0.3)",borderRadius:8,padding:"5px 11px",color:"#4CAF8C",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",whiteSpace:"nowrap"}}>✓ Paid</button>}
+          <XBtn onClick={()=>onDel(item.id)}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReceiveRow({ item, accent, onDel, onUpd }) {
+  const ov = !item.received && isPast(item.dueDate);
+  return (
+    <div style={{background:T.surf,borderRadius:16,padding:"14px 16px",border:`1px solid ${ov?"rgba(61,191,168,0.4)":T.border}`}}>
+      <div style={{display:"flex",alignItems:"flex-start"}}>
+        <div style={{width:38,height:38,borderRadius:10,flexShrink:0,marginRight:12,marginTop:1,background:`rgba(${rgb(accent)},0.13)`,border:`1px solid rgba(${rgb(accent)},0.22)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>💰</div>
+        <div style={{flex:1}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            <span style={{color:T.text,fontSize:14,fontWeight:600}}>{item.from}</span>
+            {ov&&<Badge color={accent} label="OVERDUE"/>}
+            {item.received&&<Badge color="#4CAF8C" label="RECEIVED"/>}
+          </div>
+          {item.category&&<div style={{color:T.muted,fontSize:12,marginTop:2}}>{item.category}</div>}
+          <div style={{color:item.received?"#4CAF8C":accent,fontSize:18,fontWeight:700,marginTop:6,fontFamily:"'Cormorant Garamond',serif"}}>
+            ₹{Number(item.amount||0).toLocaleString("en-IN")}
+          </div>
+          {item.dueDate&&<div style={{color:T.muted,fontSize:11,marginTop:2}}>Expected by: {fmt(item.dueDate)}</div>}
+          {item.notes&&<div style={{color:T.muted,fontSize:12,marginTop:6}}>{item.notes}</div>}
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"flex-end",marginLeft:10}}>
+          {!item.received&&(
+            <button onClick={()=>onUpd(item.id,{received:true})} style={{
+              background:`rgba(${rgb(accent)},0.1)`,border:`1px solid rgba(${rgb(accent)},0.3)`,
+              borderRadius:8,padding:"5px 11px",color:accent,fontSize:11,fontWeight:600,
+              cursor:"pointer",fontFamily:"'DM Sans',sans-serif",whiteSpace:"nowrap",
+            }}>✓ Received</button>
+          )}
+          <XBtn onClick={()=>onDel(item.id)}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HealthRow({ item, accent, onDel }) {
+  const d=daysTo(item.date),past=d!==null&&d<0;
+  const icons={"Doctor Visit":"🏥","Lab Test":"🧪","Medication":"💊","Dental":"🦷","Eye Check":"👁️","Therapy":"🧠","Gym / Exercise":"💪","Other":"❤️"};
+  return (
+    <Card accent={accent} highlight={d===0}>
+      <div style={{display:"flex",alignItems:"flex-start"}}>
+        <div style={{width:38,height:38,borderRadius:10,flexShrink:0,marginRight:12,marginTop:1,background:`rgba(${rgb(accent)},0.13)`,border:`1px solid rgba(${rgb(accent)},0.22)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>{icons[item.type]||"❤️"}</div>
+        <div style={{flex:1}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            <span style={{color:T.text,fontSize:14,fontWeight:600}}>{item.title}</span>
+            {d===0&&<Badge color={accent} label="TODAY"/>}{d===1&&<Badge color={accent} label="TOMORROW"/>}
+            {item.type&&<Badge color={accent} label={item.type} soft/>}
+          </div>
+          {item.doctor&&<div style={{color:T.muted,fontSize:12,marginTop:4}}>👨‍⚕️ {item.doctor}</div>}
+          {item.date&&<div style={{color:past?T.muted:accent,fontSize:12,marginTop:2}}>📅 {fmt(item.date)}{item.time&&` · ${item.time}`}</div>}
+          {item.clinic&&<div style={{color:T.muted,fontSize:12,marginTop:2}}>📍 {item.clinic}</div>}
+          {item.medication&&<div style={{color:T.muted,fontSize:12,marginTop:4}}>💊 {item.medication}{item.dosage&&` — ${item.dosage}`}</div>}
+          {item.notes&&<div style={{color:T.muted,fontSize:12,marginTop:6,lineHeight:1.5}}>{item.notes}</div>}
+        </div>
+        <div style={{textAlign:"right",marginLeft:8,flexShrink:0}}>
+          {!past&&d!==null&&<div style={{color:T.muted,fontSize:11,marginBottom:6}}>{d===0?"Today":`${d}d`}</div>}
+          {past&&<div style={{color:T.muted,fontSize:10,marginBottom:6}}>Done</div>}
+          <XBtn onClick={()=>onDel(item.id)}/>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+const CAT_COLORS = {"Food & Dining":"#FF8C42","Transport / Fuel":"#5B9BDB","Groceries":"#4CAF8C","Shopping":"#A87BDB","Entertainment":"#DB8C5B","Medical / Health":"#E84393","Utilities":"#3DBFA8","Personal Care":"#DB5B6B","Kids / Education":"#D4A843","Home / Maintenance":"#6B9EDB","Travel":"#8BC34A","Other":"#6B6B80"};
+const CAT_ICONS  = {"Food & Dining":"🍽️","Transport / Fuel":"🚗","Groceries":"🛒","Shopping":"🛍️","Entertainment":"🎬","Medical / Health":"🏥","Utilities":"⚡","Personal Care":"💆","Kids / Education":"📚","Home / Maintenance":"🏠","Travel":"✈️","Other":"📌"};
+const EXP_CATS   = ["Food & Dining","Transport / Fuel","Groceries","Shopping","Entertainment","Medical / Health","Utilities","Personal Care","Kids / Education","Home / Maintenance","Travel","Other"];
+
+function PortfolioSummary({ items, accent }) {
+  const total  = items.reduce((s,i)=>s+Number(i.value||0),0);
+  const byType = items.reduce((acc,i)=>{ const t=i.type||"Other"; acc[t]=(acc[t]||0)+Number(i.value||0); return acc; },{});
+  return (
+    <div style={{marginBottom:14,padding:"16px 18px",background:`rgba(${rgb(accent)},0.07)`,borderRadius:18,border:`1px solid rgba(${rgb(accent)},0.2)`}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+        <span style={{color:T.muted,fontSize:11,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.6px"}}>Total Portfolio Value</span>
+        <span style={{color:accent,fontSize:11,fontWeight:600}}>{items.length} asset{items.length!==1?"s":""}</span>
+      </div>
+      <div style={{color:accent,fontSize:28,fontWeight:700,fontFamily:"'Cormorant Garamond',serif",letterSpacing:"-0.5px",marginBottom:10}}>
+        ₹{total.toLocaleString("en-IN")}
+      </div>
+      {Object.keys(byType).length>1&&(
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {Object.entries(byType).sort((a,b)=>b[1]-a[1]).map(([type,val])=>{
+            const pct=total>0?Math.round((val/total)*100):0;
+            return (
+              <div key={type}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                  <span style={{color:T.muted,fontSize:11}}>{type}</span>
+                  <span style={{color:T.text,fontSize:11,fontWeight:600}}>₹{val.toLocaleString("en-IN")} <span style={{color:T.muted,fontWeight:400}}>({pct}%)</span></span>
+                </div>
+                <div style={{height:3,background:"rgba(255,255,255,0.06)",borderRadius:2}}>
+                  <div style={{height:"100%",width:`${pct}%`,background:accent,borderRadius:2,opacity:0.7,transition:"width 0.4s"}}/>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ExpenseSummary({ items, accent }) {
+  const now = new Date();
+  const [viewMonth, setViewMonth] = useState(now.getMonth());
+  const [viewYear,  setViewYear]  = useState(now.getFullYear());
+  const monthName      = new Date(viewYear, viewMonth, 1).toLocaleString("en-IN",{month:"long",year:"numeric"});
+  const isCurrentMonth = viewMonth===now.getMonth() && viewYear===now.getFullYear();
+  const monthItems     = items.filter(e=>{ const d=new Date(e.date||e.createdAt); return d.getMonth()===viewMonth && d.getFullYear()===viewYear; });
+  const monthTotal     = monthItems.reduce((s,e)=>s+Number(e.amount||0),0);
+  const byCat          = monthItems.reduce((acc,e)=>{ const c=e.category||"Other"; acc[c]=(acc[c]||0)+Number(e.amount||0); return acc; },{});
+  const todayTotal     = isCurrentMonth ? monthItems.filter(e=>(e.date||"").slice(0,10)===now.toISOString().slice(0,10)).reduce((s,e)=>s+Number(e.amount||0),0) : 0;
+  const prevMonth = () => { if(viewMonth===0){setViewMonth(11);setViewYear(y=>y-1);}else setViewMonth(m=>m-1); };
+  const nextMonth = () => { if(viewMonth===11){setViewMonth(0);setViewYear(y=>y+1);}else setViewMonth(m=>m+1); };
+
+  return (
+    <div style={{marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+        <button onClick={prevMonth} style={{background:T.surf,border:`1px solid ${T.border}`,borderRadius:8,width:32,height:32,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:T.text,fontSize:18}}>‹</button>
+        <span style={{color:T.text,fontSize:13,fontWeight:600}}>{monthName}</span>
+        <button onClick={nextMonth} disabled={isCurrentMonth} style={{background:T.surf,border:`1px solid ${T.border}`,borderRadius:8,width:32,height:32,display:"flex",alignItems:"center",justifyContent:"center",cursor:isCurrentMonth?"default":"pointer",color:isCurrentMonth?T.muted:T.text,fontSize:18,opacity:isCurrentMonth?0.3:1}}>›</button>
+      </div>
+      <div style={{padding:"16px 18px",background:`rgba(${rgb(accent)},0.07)`,borderRadius:18,border:`1px solid rgba(${rgb(accent)},0.2)`,marginBottom:10}}>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:8}}>
+          <div>
+            <div style={{color:T.muted,fontSize:11,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.6px",marginBottom:4}}>Monthly Spend</div>
+            <div style={{color:accent,fontSize:28,fontWeight:700,fontFamily:"'Cormorant Garamond',serif",letterSpacing:"-0.5px"}}>
+              {monthTotal>0 ? `₹${monthTotal.toLocaleString("en-IN")}` : "—"}
+            </div>
+          </div>
+          {isCurrentMonth && todayTotal>0 && (
+            <div style={{textAlign:"right"}}>
+              <div style={{color:T.muted,fontSize:10,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:4}}>Today</div>
+              <div style={{color:T.text,fontSize:16,fontWeight:700,fontFamily:"'Cormorant Garamond',serif"}}>₹{todayTotal.toLocaleString("en-IN")}</div>
+            </div>
+          )}
+        </div>
+        <div style={{color:T.muted,fontSize:11,marginBottom:Object.keys(byCat).length>0?12:0}}>
+          {monthItems.length} transaction{monthItems.length!==1?"s":""} this month
+        </div>
+        {Object.keys(byCat).length>0 && (
+          <div style={{display:"flex",flexDirection:"column",gap:7}}>
+            {Object.entries(byCat).sort((a,b)=>b[1]-a[1]).map(([cat,val])=>{
+              const pct = monthTotal>0 ? Math.round((val/monthTotal)*100) : 0;
+              const c   = CAT_COLORS[cat] || accent;
+              return (
+                <div key={cat}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                    <span style={{color:T.muted,fontSize:11}}>{cat}</span>
+                    <span style={{color:T.text,fontSize:11,fontWeight:600}}>₹{val.toLocaleString("en-IN")} <span style={{color:T.muted,fontWeight:400}}>({pct}%)</span></span>
+                  </div>
+                  <div style={{height:3,background:"rgba(255,255,255,0.06)",borderRadius:2}}>
+                    <div style={{height:"100%",width:`${pct}%`,background:c,borderRadius:2,opacity:0.8,transition:"width 0.4s"}}/>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {monthItems.length===0 && (
+          <div style={{color:T.muted,fontSize:12,fontStyle:"italic"}}>No expenses logged this month.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ExpenseRow({ item, accent, onDel }) {
+  const icon = CAT_ICONS[item.category] || "📌";
+  const isToday = (item.date||"").slice(0,10) === new Date().toISOString().slice(0,10);
+  const catColor = CAT_COLORS[item.category] || accent;
+  return (
+    <div style={{background:T.surf,borderRadius:16,padding:"12px 16px",border:`1px solid ${T.border}`}}>
+      <div style={{display:"flex",alignItems:"center",gap:12}}>
+        <div style={{width:38,height:38,borderRadius:10,flexShrink:0,background:`rgba(${rgb(catColor)},0.13)`,border:`1px solid rgba(${rgb(catColor)},0.22)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:17}}>{icon}</div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+            <span style={{color:T.text,fontSize:13,fontWeight:600}}>{item.description||item.category}</span>
+            {item.description&&item.category&&<Badge color={catColor} label={item.category} soft/>}
+            {isToday&&<Badge color={accent} label="Today" soft/>}
+          </div>
+          <div style={{color:T.muted,fontSize:11,marginTop:2}}>{fmt(item.date||item.createdAt)}</div>
+        </div>
+        <div style={{textAlign:"right",flexShrink:0}}>
+          <div style={{color:catColor,fontSize:15,fontWeight:700,fontFamily:"'Cormorant Garamond',serif"}}>₹{Number(item.amount||0).toLocaleString("en-IN")}</div>
+        </div>
+        <XBtn onClick={()=>onDel(item.id)}/>
+      </div>
+    </div>
+  );
+}
+
+const REQUIRED = { todos:"text", meetings:"title", events:"title", projects:"title", portfolio:"name", payments:"category", receivables:"from", health:"title", expenses:"amount" };
+
+function AddModal({ folder, onSave, onClose }) {
+  const [form, setForm] = useState({ status:"Planning", progress:0 });
+  const [shake, setShake] = useState(false);
+  const upd = useCallback((k,v) => setForm(prev=>({...prev,[k]:v})), []);
+  const ac = folder.accent;
+  const fp = { form, upd, ac };
+
+  const submit = () => {
+    const req = REQUIRED[folder.id];
+    if (!form[req] || !String(form[req]).trim()) {
+      setShake(true); setTimeout(()=>setShake(false),600); return;
+    }
+    const now = new Date().toISOString();
+    let item;
+    if      (folder.id==="todos")       item={text:form.text,notes:form.notes,createdAt:now};
+    else if (folder.id==="meetings")    item={title:form.title,date:form.date,time:form.time,location:form.location,notes:form.notes};
+    else if (folder.id==="events")      item={title:form.title,date:form.date,person:form.person,type:form.type,notes:form.notes};
+    else if (folder.id==="projects")    item={title:form.title,status:form.status||"Planning",deadline:form.deadline,progress:Number(form.progress)||0,notes:form.notes};
+    else if (folder.id==="portfolio")   item={name:form.name,type:form.type,value:form.value,units:form.units,notes:form.notes};
+    else if (folder.id==="payments")    item={category:form.category,amount:form.amount,dueDate:form.dueDate,paid:false,notes:form.notes};
+    else if (folder.id==="receivables") item={from:form.from,category:form.category,amount:form.amount,dueDate:form.dueDate,received:false,notes:form.notes};
+    else if (folder.id==="health")      item={title:form.title,type:form.type,date:form.date,time:form.time,doctor:form.doctor,clinic:form.clinic,medication:form.medication,dosage:form.dosage,notes:form.notes};
+    else if (folder.id==="expenses")    item={amount:form.amount,category:form.category,description:form.description,date:form.date||new Date().toISOString().slice(0,10),createdAt:now};
+    else return;
+    onSave(item);
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:50,display:"flex",alignItems:"flex-end",backdropFilter:"blur(6px)"}} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div style={{width:"100%",background:"#10121B",borderRadius:"24px 24px 0 0",padding:"22px 20px 48px",border:`1px solid ${T.border}`,borderBottom:"none",maxHeight:"90vh",overflowY:"auto"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:22}}>
+          <div style={{color:T.text,fontSize:16,fontWeight:700}}>Add to {folder.label}</div>
+          <button onClick={onClose} style={{background:T.surf,border:`1px solid ${T.border}`,borderRadius:8,width:32,height:32,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:T.muted,fontSize:20}}>×</button>
+        </div>
+        {shake&&<div style={{color:"#DB5B6B",fontSize:12,marginBottom:12}}>Please fill in the required field marked with *</div>}
+
+        {folder.id==="todos"&&<><FI {...fp} label="Task" fk="text" ph="What needs to be done?" req/><FT {...fp} label="Notes (optional)" fk="notes" ph="Additional details…"/></>}
+        {folder.id==="meetings"&&<><FI {...fp} label="Meeting Title" fk="title" ph="Meeting name or agenda" req/><FI {...fp} label="Date" fk="date" type="date"/><FI {...fp} label="Time" fk="time" type="time"/><FI {...fp} label="Location / Link" fk="location" ph="Room, address, or video link"/><FT {...fp} label="Notes" fk="notes" ph="Agenda, participants, prep needed…"/></>}
+        {folder.id==="events"&&<><FI {...fp} label="Event / Occasion" fk="title" ph="Birthday, Anniversary, Festival…" req/><FI {...fp} label="Person / People" fk="person" ph="Name(s)"/><FI {...fp} label="Date" fk="date" type="date"/><FS {...fp} label="Type" fk="type" opts={["Birthday","Anniversary","Wedding","Festival","Graduation","Baby Shower","Other"]}/><FT {...fp} label="Notes / Gift Ideas" fk="notes" ph="Plans, gifts, reminders…"/></>}
+        {folder.id==="projects"&&<>
+          <FI {...fp} label="Project Title" fk="title" ph="Project name" req/>
+          <FS {...fp} label="Status" fk="status" opts={["Planning","In Progress","On Hold","Completed"]}/>
+          <FI {...fp} label="Deadline" fk="deadline" type="date"/>
+          <div style={{marginBottom:14}}>
+            <label style={{color:T.muted,fontSize:10,display:"block",marginBottom:5,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.6px"}}>Progress: <span style={{color:ac}}>{form.progress||0}%</span></label>
+            <input type="range" min="0" max="100" value={form.progress||0} onChange={e=>upd("progress",e.target.value)} style={{width:"100%",accentColor:ac,height:4,cursor:"pointer"}}/>
+          </div>
+          <FT {...fp} label="Notes / Milestones" fk="notes" ph="Goals, dependencies, next steps…"/>
+        </>}
+        {folder.id==="portfolio"&&<><FI {...fp} label="Asset Name" fk="name" ph="Stock, Fund, Property…" req/><FS {...fp} label="Asset Type" fk="type" opts={["Equity / Stocks","Mutual Fund","Real Estate","Fixed Deposit","Gold / Silver","Crypto","PPF / NPS","Other"]}/><FI {...fp} label="Current Value (₹)" fk="value" type="number" ph="0"/><FI {...fp} label="Units / Quantity" fk="units" ph="No. of units, shares, or grams"/><FT {...fp} label="Notes" fk="notes" ph="Broker, account no., strategy…"/></>}
+        {folder.id==="payments"&&<><FS {...fp} label="Category" fk="category" opts={["SIP","Advance Tax","HDFC Insurance Policy","Kashvi Fees","Iesha Monthly Expenses","Iesha Home Monthly Expenses","Foreign Trip Expenses","Ahuja Rentco","Ahuja Residency","Ahuja Electricity + Other Charges","Mother Home Monthly Expenses","Other"]} req/><FI {...fp} label="Amount (₹)" fk="amount" type="number" ph="0"/><FI {...fp} label="Due Date" fk="dueDate" type="date"/><FT {...fp} label="Notes" fk="notes" ph="Reference number, account details…"/></>}
+        {folder.id==="receivables"&&<><FI {...fp} label="Receivable From" fk="from" ph="Person or company name" req/><FS {...fp} label="Category" fk="category" opts={["Loan Given","Security Deposit","Business Due","Salary / Bonus","Rental Income","Refund","Insurance Claim","Family / Friend","Other"]}/><FI {...fp} label="Amount (₹)" fk="amount" type="number" ph="0"/><FI {...fp} label="Expected By" fk="dueDate" type="date"/><FT {...fp} label="Notes" fk="notes" ph="Reference, agreement details…"/></>}
+        {folder.id==="health"&&<>
+          <FI {...fp} label="Title / Description" fk="title" ph="e.g. Annual Checkup, Cardiologist Visit…" req/>
+          <FS {...fp} label="Type" fk="type" opts={["Doctor Visit","Lab Test","Medication","Dental","Eye Check","Therapy","Gym / Exercise","Other"]}/>
+          <FI {...fp} label="Date" fk="date" type="date"/>
+          <FI {...fp} label="Time" fk="time" type="time"/>
+          <FI {...fp} label="Doctor / Specialist" fk="doctor" ph="Dr. Name"/>
+          <FI {...fp} label="Clinic / Hospital" fk="clinic" ph="Location or address"/>
+          <FI {...fp} label="Medication (if any)" fk="medication" ph="Medicine name"/>
+          <FI {...fp} label="Dosage / Frequency" fk="dosage" ph="e.g. 500mg twice daily"/>
+          <FT {...fp} label="Notes / Instructions" fk="notes" ph="Test results, instructions, follow-ups…"/>
+        </>}
+        {folder.id==="expenses"&&<>
+          <div style={{marginBottom:18}}>
+            <label style={{color:T.muted,fontSize:10,display:"block",marginBottom:6,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.6px"}}>Amount (₹) <span style={{color:ac}}>*</span></label>
+            <div style={{position:"relative"}}>
+              <span style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",color:T.muted,fontSize:18,pointerEvents:"none",fontWeight:600}}>₹</span>
+              <input className="vi" style={{"--ac":ac,paddingLeft:32,fontSize:22,fontWeight:700,fontFamily:"'Cormorant Garamond',serif",letterSpacing:"-0.3px"}} type="number" value={form.amount||""} placeholder="0" onChange={e=>upd("amount",e.target.value)}/>
+            </div>
+          </div>
+          <FS {...fp} label="Category" fk="category" opts={EXP_CATS}/>
+          <FI {...fp} label="Description (optional)" fk="description" ph="e.g. Dinner at Taj, Petrol, Amazon order…"/>
+          <FI {...fp} label="Date" fk="date" type="date"/>
+        </>}
+
+        <button onClick={submit} style={{width:"100%",marginTop:8,background:`linear-gradient(135deg,${ac} 0%,rgba(${rgb(ac)},0.65) 100%)`,border:"none",borderRadius:14,padding:"15px",color:["#D4A843","#4CAF8C","#FF8C42"].includes(ac)?"#000":"#fff",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",letterSpacing:"0.2px"}}>
+          {folder.id==="expenses" ? "Log Expense" : "Save Item"}
+        </button>
+      </div>
+    </div>
+  );
+}
