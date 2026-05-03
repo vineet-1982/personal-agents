@@ -161,11 +161,12 @@
         (async () => {
           const id = getVaultId();
           if (id) {
-            // Known device — load data from Supabase
-            const d = await store.loadData();
-            if (d && typeof d === "object") {
+            // Known device — load PIN + data from Supabase
+            const { data: row } = await db.from("vault").select("pin, data").eq("vault_id", id).maybeSingle();
+            if (row?.pin) setSavedPin(row.pin);
+            if (row?.data && typeof row.data === "object") {
               const merged = { ...EMPTY };
-              for (const key of Object.keys(EMPTY)) { if (Array.isArray(d[key])) merged[key] = d[key]; }
+              for (const key of Object.keys(EMPTY)) { if (Array.isArray(row.data[key])) merged[key] = row.data[key]; }
               setData(merged);
             }
             setStep("enter");
