@@ -161,17 +161,23 @@
         (async () => {
           const id = getVaultId();
           if (id) {
-            // Known device — load PIN + data from Supabase
             const { data: row } = await db.from("vault").select("pin, data").eq("vault_id", id).maybeSingle();
-            if (row?.pin) setSavedPin(row.pin);
-            if (row?.data && typeof row.data === "object") {
-              const merged = { ...EMPTY };
-              for (const key of Object.keys(EMPTY)) { if (Array.isArray(row.data[key])) merged[key] = row.data[key]; }
-              setData(merged);
+            if (row) {
+              // Valid vault — load PIN + data
+              if (row.pin) setSavedPin(row.pin);
+              if (row.data && typeof row.data === "object") {
+                const merged = { ...EMPTY };
+                for (const key of Object.keys(EMPTY)) { if (Array.isArray(row.data[key])) merged[key] = row.data[key]; }
+                setData(merged);
+              }
+              setStep("enter");
+            } else {
+              // Stale vault_id (table was reset etc) — clear and start fresh
+              localStorage.removeItem(VIDKEY);
+              setStep("enter_or_new");
             }
-            setStep("enter");
           } else {
-            // New device — user will enter PIN to connect or set new vault
+            // New device — enter PIN to connect or create vault
             setStep("enter_or_new");
           }
           setReady(true);
