@@ -165,7 +165,7 @@
       const digit = useCallback(d => {
         setPin(prev => {
           const np = prev + d;
-          if (np.length < 4) return np;
+          if (np.length < 6) return np;
           setTimeout(async () => {
             if (step === "enter_or_new") {
               // Look up PIN in Supabase
@@ -231,7 +231,7 @@
             <div style={{color:T.muted,fontSize:13,marginTop:5}}>{subs[step]||""}</div>
           </div>
           <div style={{display:"flex",gap:18,marginBottom:10}}>
-            {[0,1,2,3].map(i=>(
+            {[0,1,2,3,4,5].map(i=>(
               <div key={i} style={{width:15,height:15,borderRadius:"50%",transition:"all 0.15s",background:i<pin.length?T.gold:"transparent",border:`2px solid ${i<pin.length?T.gold:"rgba(255,255,255,0.2)"}`,transform:i<pin.length?"scale(1.15)":"scale(1)",boxShadow:i<pin.length?"0 0 14px rgba(212,168,67,0.55)":"none"}}/>
             ))}
           </div>
