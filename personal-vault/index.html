@@ -412,6 +412,7 @@
               {dueLabel&&<span style={{color:dueColor,fontSize:11,fontWeight:600}}>⏰ {dueLabel}</span>}
               {!dueLabel&&<span style={{color:T.muted,fontSize:11}}>Added {fmt(item.createdAt)}</span>}
             </div>
+            {item.dueDate&&!done&&(()=>{const u=gcalUrl({title:item.text,date:item.dueDate,notes:item.notes});return u&&<a href={u} target="_blank" rel="noopener noreferrer" style={{display:"inline-flex",alignItems:"center",gap:5,marginTop:8,padding:"5px 12px",borderRadius:8,background:"rgba(66,133,244,0.12)",border:"1px solid rgba(66,133,244,0.25)",color:"#6EA8FE",fontSize:11,fontWeight:600,textDecoration:"none"}}>📆 Add to Google Calendar</a>})()}
           </div>
           <XBtn onClick={()=>onDel(item.id)}/>
         </div>
@@ -483,6 +484,7 @@
               <div style={{color:T.muted,fontSize:12,marginTop:4}}>👤 {item.person}{item.type&&` · ${item.type}`}</div>
               <div style={{color:accent,fontSize:12,marginTop:2}}>📅 {fmt(item.date)}</div>
               {item.notes&&<div style={{color:T.muted,fontSize:12,marginTop:6}}>{item.notes}</div>}
+              {(()=>{const u=gcalUrl({title:item.title,date:item.date,notes:[item.person&&`👤 ${item.person}`,item.type,item.notes].filter(Boolean).join("\n")});return u&&<a href={u} target="_blank" rel="noopener noreferrer" style={{display:"inline-flex",alignItems:"center",gap:5,marginTop:10,padding:"5px 12px",borderRadius:8,background:"rgba(66,133,244,0.12)",border:"1px solid rgba(66,133,244,0.25)",color:"#6EA8FE",fontSize:11,fontWeight:600,textDecoration:"none"}}>📆 Add to Google Calendar</a>})()}
             </div>
             <div style={{textAlign:"right",marginLeft:8,flexShrink:0}}>
               {d!==null&&d>=0&&<div style={{color:T.muted,fontSize:11,marginBottom:6}}>{d===0?"Today":`${d}d`}</div>}
@@ -586,6 +588,7 @@
               <div style={{color:ov?"#DB5B6B":accent,fontSize:18,fontWeight:700,marginTop:6,fontFamily:"'Cormorant Garamond',serif"}}>₹{Number(item.amount||0).toLocaleString("en-IN")}</div>
               {item.dueDate&&<div style={{color:T.muted,fontSize:11,marginTop:2}}>Due: {fmt(item.dueDate)}</div>}
               {item.notes&&<div style={{color:T.muted,fontSize:12,marginTop:6}}>{item.notes}</div>}
+              {!item.paid&&item.dueDate&&(()=>{const u=gcalUrl({title:`Pay: ${item.category||"Payment"}`,date:item.dueDate,notes:[`₹${Number(item.amount||0).toLocaleString("en-IN")}`,item.notes].filter(Boolean).join("\n")});return u&&<a href={u} target="_blank" rel="noopener noreferrer" style={{display:"inline-flex",alignItems:"center",gap:5,marginTop:8,padding:"5px 12px",borderRadius:8,background:"rgba(66,133,244,0.12)",border:"1px solid rgba(66,133,244,0.25)",color:"#6EA8FE",fontSize:11,fontWeight:600,textDecoration:"none"}}>📆 Add to Google Calendar</a>})()}
             </div>
             <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"flex-end",marginLeft:10}}>
               {!item.paid&&<button onClick={()=>onUpd(item.id,{paid:true})} style={{background:"rgba(76,175,140,0.1)",border:"1px solid rgba(76,175,140,0.3)",borderRadius:8,padding:"5px 11px",color:"#4CAF8C",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",whiteSpace:"nowrap"}}>✓ Paid</button>}
