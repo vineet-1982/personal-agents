@@ -25,13 +25,10 @@
       "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImplZHp4bW1ub21zdXJ0bmZldG1iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4MDEzOTksImV4cCI6MjA5MzM3NzM5OX0.koP-BBIqeEZYfsYUYzep7nCG9Tmzg4tFH9iBtjVivXs"
     );
 
-    // ── Vault ID (no login needed) ──
+    // ── Vault ID — persisted in localStorage, linked to PIN in Supabase ──
     const VIDKEY = "vault_id_v1";
-    function getVaultId() {
-      let id = localStorage.getItem(VIDKEY);
-      if (!id) { id = crypto.randomUUID(); localStorage.setItem(VIDKEY, id); }
-      return id;
-    }
+    function getVaultId() { return localStorage.getItem(VIDKEY); }
+    function setVaultId(id) { localStorage.setItem(VIDKEY, id); }
 
     (() => {
       if (document.getElementById("vault-styles")) return;
@@ -79,20 +76,27 @@
     // ── Supabase store ──
     const store = {
       async saveData(obj) {
-        const vault_id = getVaultId();
-        await db.from("vault").upsert({ vault_id, data: obj, updated_at: new Date().toISOString() });
+        await db.from("vault").upsert({ vault_id: getVaultId(), data: obj, updated_at: new Date().toISOString() });
       },
       async loadData() {
-        const { data } = await db.from("vault").select("data").eq("vault_id", getVaultId()).maybeSingle();
+        const id = getVaultId(); if (!id) return null;
+        const { data } = await db.from("vault").select("data").eq("vault_id", id).maybeSingle();
         return data?.data || null;
       },
-      async savePin(pin) {
-        const vault_id = getVaultId();
-        await db.from("vault").upsert({ vault_id, pin, updated_at: new Date().toISOString() });
+      // Called on first setup — creates a new vault linked to this PIN
+      async createVault(pin) {
+        const vault_id = crypto.randomUUID();
+        setVaultId(vault_id);
+        await db.from("vault").insert({ vault_id, pin, data: {}, updated_at: new Date().toISOString() });
+        return vault_id;
       },
-      async loadPin() {
-        const { data } = await db.from("vault").select("pin").eq("vault_id", getVaultId()).maybeSingle();
-        return data?.pin || null;
+      // Called on new device — finds existing vault by PIN
+      async findByPin(pin) {
+        const { data } = await db.from("vault").select("vault_id, data").eq("pin", pin).maybeSingle();
+        return data || null;
+      },
+      async savePin(pin) {
+        await db.from("vault").upsert({ vault_id: getVaultId(), pin, updated_at: new Date().toISOString() });
       },
     };
 
@@ -155,12 +159,19 @@
 
       useEffect(() => {
         (async () => {
-          const [p, d] = await Promise.all([store.loadPin(), store.loadData()]);
-          if (p) { setSavedPin(p); setStep("enter"); } else { setStep("set"); }
-          if (d && typeof d === "object") {
-            const merged = { ...EMPTY };
-            for (const key of Object.keys(EMPTY)) { if (Array.isArray(d[key])) merged[key] = d[key]; }
-            setData(merged);
+          const id = getVaultId();
+          if (id) {
+            // Known device — load data from Supabase
+            const d = await store.loadData();
+            if (d && typeof d === "object") {
+              const merged = { ...EMPTY };
+              for (const key of Object.keys(EMPTY)) { if (Array.isArray(d[key])) merged[key] = d[key]; }
+              setData(merged);
+            }
+            setStep("enter");
+          } else {
+            // New device — user will enter PIN to connect or set new vault
+            setStep("enter_or_new");
           }
           setReady(true);
         })();
@@ -178,13 +189,32 @@
           if (np.length < 4) return np;
           setTimeout(async () => {
             if (step === "enter") {
+              // Known device — PIN checked locally (already loaded from Supabase on mount)
               if (np === savedPin) { setLocked(false); setPin(""); setErr(""); }
               else setTimeout(() => { setPin(""); setErr("Wrong PIN. Try again."); }, 280);
+            } else if (step === "enter_or_new") {
+              // New device — look up PIN in Supabase
+              setErr(""); setPin("");
+              const vault = await store.findByPin(np);
+              if (vault) {
+                // Found existing vault — link this device
+                setVaultId(vault.vault_id);
+                setSavedPin(np);
+                const merged = { ...EMPTY };
+                if (vault.data && typeof vault.data === "object") {
+                  for (const key of Object.keys(EMPTY)) { if (Array.isArray(vault.data[key])) merged[key] = vault.data[key]; }
+                }
+                setData(merged);
+                setLocked(false); setStep("enter");
+              } else {
+                // PIN not found — ask if they want to create new vault
+                setStep("set"); setConf(np); setPin(""); setErr("No vault found. Re-enter PIN to create a new one.");
+              }
             } else if (step === "set") {
-              setConf(np); setPin(""); setStep("confirm");
+              setConf(np); setPin(""); setStep("confirm"); setErr("");
             } else if (step === "confirm") {
               if (np === conf) {
-                await store.savePin(np);
+                await store.createVault(np);
                 setSavedPin(np); setLocked(false); setPin(""); setStep("enter"); setErr("");
               } else {
                 setTimeout(() => { setPin(""); setConf(""); setErr("PINs didn't match."); setStep("set"); }, 280);
@@ -216,7 +246,7 @@
     // LOCK SCREEN
     // ════════════════════════════════════════════════════════════
     function LockScreen({ pin, step, err, onDigit, onDel }) {
-      const subs = { set:"Choose a 4-digit lock code", confirm:"Re-enter to confirm", enter:"Your personal vault is secured" };
+      const subs = { set:"Choose a 4-digit PIN", confirm:"Re-enter to confirm", enter:"Your personal vault is secured", enter_or_new:"Enter your PIN to unlock" };
       const keys = [1,2,3,4,5,6,7,8,9,"",0,"⌫"];
       return (
         <div style={{background:T.bg,minHeight:"100vh",backgroundImage:"radial-gradient(ellipse 70% 35% at 50% 0%,rgba(212,168,67,0.09) 0%,transparent 65%)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:"'DM Sans',sans-serif",padding:"24px"}}>
