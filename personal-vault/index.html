@@ -74,16 +74,19 @@
     // ── Supabase store — PIN is the only identifier ──
     const store = {
       async findByPin(pin) {
-        const { data } = await db.from("vault").select("vault_id, data").eq("pin", pin).maybeSingle();
+        const { data, error } = await db.from("vault").select("vault_id, data").eq("pin", pin).maybeSingle();
+        console.log("[findByPin]", { data, error });
         return data || null;
       },
       async createVault(pin) {
         currentVaultId = crypto.randomUUID();
-        await db.from("vault").insert({ vault_id: currentVaultId, pin, data: {}, updated_at: new Date().toISOString() });
+        const { error } = await db.from("vault").insert({ vault_id: currentVaultId, pin, data: {}, updated_at: new Date().toISOString() });
+        console.log("[createVault]", { currentVaultId, error });
       },
       async saveData(obj) {
-        if (!currentVaultId) return;
-        await db.from("vault").upsert({ vault_id: currentVaultId, data: obj, updated_at: new Date().toISOString() });
+        if (!currentVaultId) { console.warn("[saveData] no currentVaultId!"); return; }
+        const { error } = await db.from("vault").upsert({ vault_id: currentVaultId, data: obj, updated_at: new Date().toISOString() });
+        console.log("[saveData]", { error, keys: Object.keys(obj) });
       },
     };
 
