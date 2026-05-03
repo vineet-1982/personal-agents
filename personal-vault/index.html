@@ -46,6 +46,7 @@
         @keyframes slideUp { from{transform:translateY(20px);opacity:0} to{transform:translateY(0);opacity:1} }
         @keyframes fadeOut { from{opacity:1} to{opacity:0} }
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes bounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-5px)} }
       `;
       document.head.appendChild(s);
     })();
@@ -302,7 +303,210 @@
             {FOLDERS.map(f=><FolderCard key={f.id} f={f} count={counts[f.id]||0} onClick={()=>onOpen(f.id)}/>)}
           </div>
           <div style={{textAlign:"center",marginTop:28,color:T.muted,fontSize:11,opacity:0.5}}>Synced to cloud</div>
+          <GeminiChat data={data}/>
         </div>
+      );
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // GEMINI CHAT
+    // ════════════════════════════════════════════════════════════
+    const GEMINI_KEY = "AIzaSyC4N41_LfRIn8GYTzyR9EtgYGQmZIJOYe4";
+
+    function buildVaultContext(data) {
+      const today = new Date().toISOString().slice(0,10);
+      const lines = [`Today is ${new Date().toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}.`, ""];
+
+      const todos = (data.todos||[]);
+      const pending = todos.filter(t=>!t.done);
+      const done = todos.filter(t=>t.done);
+      if(todos.length) {
+        lines.push(`TASKS (${pending.length} pending, ${done.length} done):`);
+        pending.forEach(t=>lines.push(`  - [PENDING] ${t.text}${t.dueDate?` (due ${t.dueDate})`:""}${t.notes?` — ${t.notes}`:""}`));
+        done.forEach(t=>lines.push(`  - [DONE] ${t.text}`));
+        lines.push("");
+      }
+
+      const meetings = (data.meetings||[]);
+      if(meetings.length) {
+        lines.push(`MEETINGS (${meetings.length}):`);
+        meetings.forEach(m=>lines.push(`  - ${m.title} on ${m.date||"no date"}${m.time?` at ${m.time}`:""}${m.location?` at ${m.location}`:""}`));
+        lines.push("");
+      }
+
+      const events = (data.events||[]);
+      if(events.length) {
+        lines.push(`FRIENDS & FAMILY EVENTS (${events.length}):`);
+        events.forEach(e=>lines.push(`  - ${e.title}${e.person?` for ${e.person}`:""}${e.date?` on ${e.date}`:""}${e.type?` (${e.type})`:""}`));
+        lines.push("");
+      }
+
+      const projects = (data.projects||[]);
+      if(projects.length) {
+        lines.push(`PROJECTS (${projects.length}):`);
+        projects.forEach(p=>lines.push(`  - ${p.title} [${p.status||"Planning"}]${p.deadline?` deadline ${p.deadline}`:""}${p.progress?` ${p.progress}% done`:""}`));
+        lines.push("");
+      }
+
+      const payments = (data.payments||[]);
+      const unpaid = payments.filter(p=>!p.paid);
+      if(payments.length) {
+        lines.push(`DUE PAYMENTS (${unpaid.length} unpaid):`);
+        unpaid.forEach(p=>lines.push(`  - ${p.category||"Payment"} ₹${Number(p.amount||0).toLocaleString("en-IN")}${p.dueDate?` due ${p.dueDate}`:""}`));
+        lines.push(`  Total unpaid: ₹${unpaid.reduce((s,p)=>s+Number(p.amount||0),0).toLocaleString("en-IN")}`);
+        lines.push("");
+      }
+
+      const receivables = (data.receivables||[]);
+      const unreceived = receivables.filter(r=>!r.received);
+      if(receivables.length) {
+        lines.push(`RECEIVABLES (${unreceived.length} pending):`);
+        unreceived.forEach(r=>lines.push(`  - From ${r.from||"?"} ₹${Number(r.amount||0).toLocaleString("en-IN")}${r.dueDate?` by ${r.dueDate}`:""}`));
+        lines.push(`  Total to receive: ₹${unreceived.reduce((s,r)=>s+Number(r.amount||0),0).toLocaleString("en-IN")}`);
+        lines.push("");
+      }
+
+      const health = (data.health||[]);
+      if(health.length) {
+        lines.push(`HEALTH (${health.length} entries):`);
+        health.forEach(h=>lines.push(`  - ${h.title||h.type||"Appointment"}${h.date?` on ${h.date}`:""}${h.doctor?` with ${h.doctor}`:""}`));
+        lines.push("");
+      }
+
+      const expenses = (data.expenses||[]);
+      if(expenses.length) {
+        const now = new Date();
+        const thisMonth = expenses.filter(e=>{const d=new Date(e.date||e.createdAt);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();});
+        const monthTotal = thisMonth.reduce((s,e)=>s+Number(e.amount||0),0);
+        const byCategory = {};
+        thisMonth.forEach(e=>{byCategory[e.category||"Other"]=(byCategory[e.category||"Other"]||0)+Number(e.amount||0);});
+        lines.push(`EXPENSES (this month ₹${monthTotal.toLocaleString("en-IN")} across ${thisMonth.length} entries):`);
+        Object.entries(byCategory).sort((a,b)=>b[1]-a[1]).forEach(([cat,amt])=>lines.push(`  - ${cat}: ₹${amt.toLocaleString("en-IN")}`));
+        lines.push("");
+      }
+
+      const portfolio = (data.portfolio||[]);
+      if(portfolio.length) {
+        const total = portfolio.reduce((s,p)=>s+Number(p.value||0),0);
+        lines.push(`PORTFOLIO (${portfolio.length} assets, total ₹${total.toLocaleString("en-IN")}):`);
+        portfolio.forEach(p=>lines.push(`  - ${p.name||"Asset"}${p.type?` (${p.type})`:""}${p.value?` ₹${Number(p.value).toLocaleString("en-IN")}`:""}`));
+        lines.push("");
+      }
+
+      return lines.join("\n");
+    }
+
+    function GeminiChat({ data }) {
+      const [open, setOpen] = useState(false);
+      const [msgs, setMsgs] = useState([]);
+      const [input, setInput] = useState("");
+      const [loading, setLoading] = useState(false);
+      const bottomRef = useRef(null);
+      const inputRef = useRef(null);
+
+      useEffect(() => { if(open) setTimeout(()=>inputRef.current?.focus(),100); }, [open]);
+      useEffect(() => { bottomRef.current?.scrollIntoView({behavior:"smooth"}); }, [msgs, loading]);
+
+      const send = async () => {
+        const text = input.trim();
+        if(!text||loading) return;
+        setInput("");
+        const userMsg = {role:"user", text};
+        setMsgs(prev=>[...prev, userMsg]);
+        setLoading(true);
+
+        try {
+          const vaultCtx = buildVaultContext(data);
+          const systemPrompt = `You are a personal assistant embedded in the user's Personal Vault app. You have full access to their vault data below. Answer questions concisely and helpfully. Use Indian number formatting (₹, lakhs, etc). If asked for a summary or briefing, be specific with actual names, amounts and dates from the data. Today's date is ${new Date().toISOString().slice(0,10)}.\n\n--- VAULT DATA ---\n${vaultCtx}\n--- END VAULT DATA ---`;
+
+          const history = msgs.map(m=>({role:m.role==="user"?"user":"model",parts:[{text:m.text}]}));
+          const contents = [
+            {role:"user", parts:[{text:systemPrompt}]},
+            {role:"model", parts:[{text:"Got it. I have full context of your vault. How can I help?"}]},
+            ...history,
+            {role:"user", parts:[{text}]}
+          ];
+
+          const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`, {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({contents, generationConfig:{temperature:0.7, maxOutputTokens:1024}})
+          });
+          const json = await res.json();
+          const reply = json?.candidates?.[0]?.content?.parts?.[0]?.text || "Sorry, couldn't get a response.";
+          setMsgs(prev=>[...prev, {role:"model", text:reply}]);
+        } catch(e) {
+          setMsgs(prev=>[...prev, {role:"model", text:"Error connecting to Gemini. Check your API key."}]);
+        }
+        setLoading(false);
+      };
+
+      const SUGGESTIONS = ["What's due this week?","Summarise my day","How much do I owe in total?","What's my biggest expense this month?"];
+
+      return (
+        <>
+          {/* Floating button */}
+          <button onClick={()=>setOpen(o=>!o)} style={{position:"fixed",bottom:28,right:22,width:56,height:56,borderRadius:18,background:"linear-gradient(135deg,#D4A843,#B8902E)",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,boxShadow:"0 6px 28px rgba(212,168,67,0.45)",zIndex:100,transition:"transform 0.2s"}}
+            onMouseEnter={e=>e.currentTarget.style.transform="scale(1.08)"}
+            onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}
+          >✦</button>
+
+          {/* Chat panel */}
+          {open && (
+            <div style={{position:"fixed",bottom:96,right:16,width:"min(420px,calc(100vw - 32px))",height:"min(560px,calc(100vh - 120px))",background:"#0E1016",border:"1px solid rgba(212,168,67,0.2)",borderRadius:24,display:"flex",flexDirection:"column",boxShadow:"0 24px 80px rgba(0,0,0,0.7)",zIndex:99,overflow:"hidden",fontFamily:"'DM Sans',sans-serif"}}>
+
+              {/* Header */}
+              <div style={{padding:"14px 18px",borderBottom:"1px solid rgba(255,255,255,0.07)",display:"flex",alignItems:"center",gap:10,background:"rgba(212,168,67,0.05)"}}>
+                <div style={{width:34,height:34,borderRadius:10,background:"linear-gradient(135deg,rgba(212,168,67,0.25),rgba(212,168,67,0.08))",border:"1px solid rgba(212,168,67,0.3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>✦</div>
+                <div style={{flex:1}}>
+                  <div style={{color:T.text,fontSize:14,fontWeight:600}}>Vault Assistant</div>
+                  <div style={{color:T.muted,fontSize:11}}>Knows your full vault</div>
+                </div>
+                <button onClick={()=>setOpen(false)} style={{background:"none",border:"none",color:T.muted,fontSize:20,cursor:"pointer",lineHeight:1}}>×</button>
+              </div>
+
+              {/* Messages */}
+              <div style={{flex:1,overflowY:"auto",padding:"14px 16px",display:"flex",flexDirection:"column",gap:10}}>
+                {msgs.length===0 && (
+                  <div style={{textAlign:"center",paddingTop:16}}>
+                    <div style={{color:T.muted,fontSize:13,marginBottom:16,lineHeight:1.6}}>Ask me anything about your vault — tasks, payments, events, expenses.</div>
+                    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                      {SUGGESTIONS.map(s=>(
+                        <button key={s} onClick={()=>{setInput(s);setTimeout(()=>inputRef.current?.focus(),50);}} style={{background:"rgba(212,168,67,0.07)",border:"1px solid rgba(212,168,67,0.18)",borderRadius:12,padding:"9px 14px",color:T.text,fontSize:12,cursor:"pointer",textAlign:"left",fontFamily:"'DM Sans',sans-serif"}}>{s}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {msgs.map((m,i)=>(
+                  <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
+                    <div style={{maxWidth:"82%",padding:"10px 14px",borderRadius:m.role==="user"?"16px 16px 4px 16px":"16px 16px 16px 4px",background:m.role==="user"?"linear-gradient(135deg,rgba(212,168,67,0.22),rgba(212,168,67,0.1))":"rgba(255,255,255,0.05)",border:`1px solid ${m.role==="user"?"rgba(212,168,67,0.3)":"rgba(255,255,255,0.07)"}`,color:T.text,fontSize:13,lineHeight:1.6,whiteSpace:"pre-wrap"}}>
+                      {m.text}
+                    </div>
+                  </div>
+                ))}
+                {loading && (
+                  <div style={{display:"flex",justifyContent:"flex-start"}}>
+                    <div style={{padding:"10px 16px",borderRadius:"16px 16px 16px 4px",background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.07)",display:"flex",gap:5,alignItems:"center"}}>
+                      {[0,1,2].map(i=><div key={i} style={{width:6,height:6,borderRadius:"50%",background:T.gold,animation:`bounce 1s ease ${i*0.15}s infinite`}}/>)}
+                    </div>
+                  </div>
+                )}
+                <div ref={bottomRef}/>
+              </div>
+
+              {/* Input */}
+              <div style={{padding:"12px 14px",borderTop:"1px solid rgba(255,255,255,0.07)",display:"flex",gap:8,alignItems:"flex-end"}}>
+                <textarea ref={inputRef} value={input} onChange={e=>setInput(e.target.value)}
+                  onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}}}
+                  placeholder="Ask anything…" rows={1}
+                  style={{flex:1,background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:12,padding:"10px 14px",color:T.text,fontSize:13,fontFamily:"'DM Sans',sans-serif",outline:"none",resize:"none",lineHeight:1.5,maxHeight:100,overflowY:"auto"}}
+                  onInput={e=>{e.target.style.height="auto";e.target.style.height=Math.min(e.target.scrollHeight,100)+"px";}}
+                />
+                <button onClick={send} disabled={!input.trim()||loading} style={{width:40,height:40,borderRadius:12,background:input.trim()&&!loading?"linear-gradient(135deg,#D4A843,#B8902E)":"rgba(255,255,255,0.06)",border:"none",cursor:input.trim()&&!loading?"pointer":"default",color:input.trim()&&!loading?"#000":T.muted,fontSize:18,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.15s"}}>↑</button>
+              </div>
+            </div>
+          )}
+        </>
       );
     }
 
