@@ -418,8 +418,33 @@
       );
     }
 
+    const gcalUrl = item => {
+      const pad = n => String(n).padStart(2,"0");
+      let start, end;
+      if (item.date && item.time) {
+        const [h,m] = item.time.split(":").map(Number);
+        const [yr,mo,dy] = item.date.split("-").map(Number);
+        const s = new Date(yr,mo-1,dy,h,m);
+        const e = new Date(s.getTime()+60*60*1000);
+        const fmt2 = d => `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}T${pad(d.getHours())}${pad(d.getMinutes())}00`;
+        start = fmt2(s); end = fmt2(e);
+      } else if (item.date) {
+        const [yr,mo,dy] = item.date.split("-").map(Number);
+        const next = new Date(yr,mo-1,dy+1);
+        start = item.date.replace(/-/g,"");
+        end = `${next.getFullYear()}${pad(next.getMonth()+1)}${pad(next.getDate())}`;
+      }
+      if (!start) return null;
+      const p = new URLSearchParams({ action:"TEMPLATE", text:item.title||"Meeting" });
+      p.set("dates", `${start}/${end}`);
+      if (item.location) p.set("location", item.location);
+      if (item.notes) p.set("details", item.notes);
+      return `https://calendar.google.com/calendar/render?${p.toString()}`;
+    };
+
     function MeetingRow({ item, accent, onDel }) {
       const d=daysTo(item.date),today=d===0,past=d!==null&&d<0;
+      const calUrl = gcalUrl(item);
       return (
         <Card accent={accent} highlight={today}>
           <div style={{display:"flex",alignItems:"flex-start"}}>
@@ -431,6 +456,9 @@
               <div style={{color:accent,fontSize:12,marginTop:5}}>📅 {fmt(item.date)}{item.time&&` · ${item.time}`}</div>
               {item.location&&<div style={{color:T.muted,fontSize:12,marginTop:2}}>📍 {item.location}</div>}
               {item.notes&&<div style={{color:T.muted,fontSize:12,marginTop:6,lineHeight:1.5}}>{item.notes}</div>}
+              {calUrl&&<a href={calUrl} target="_blank" rel="noopener noreferrer" style={{display:"inline-flex",alignItems:"center",gap:5,marginTop:10,padding:"5px 12px",borderRadius:8,background:"rgba(66,133,244,0.12)",border:"1px solid rgba(66,133,244,0.25)",color:"#6EA8FE",fontSize:11,fontWeight:600,textDecoration:"none",cursor:"pointer"}}>
+                <span style={{fontSize:13}}>📆</span> Add to Google Calendar
+              </a>}
             </div>
             <div style={{textAlign:"right",marginLeft:8,flexShrink:0}}>
               {!past&&d!==null&&<div style={{color:today?accent:T.muted,fontSize:11,fontWeight:600,marginBottom:6}}>{today?"Today":`${d}d`}</div>}
